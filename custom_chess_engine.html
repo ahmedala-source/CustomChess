@@ -1,0 +1,406 @@
+<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<style>
+*{box-sizing:border-box;user-select:none;margin:0;padding:0}
+body{font-family:'Segoe UI',sans-serif;background:#1e2a2e;padding:16px;display:flex;justify-content:center}
+.app{max-width:1400px;width:100%;background:#2d3e42;border-radius:24px;padding:16px;display:flex;flex-wrap:wrap;gap:16px;justify-content:center}
+.board-panel{background:#3a5156;border-radius:20px;padding:16px;align-self:start}
+.chess-board{display:grid;background:#2b3b3f;padding:6px;border-radius:10px;box-shadow:0 0 0 2px #c9a87b}
+.cell{width:60px;height:60px;display:flex;align-items:center;justify-content:center;font-size:1.9rem;position:relative;transition:background 0.08s}
+.cell.blocked{background:#222 !important;cursor:not-allowed;box-shadow:inset 0 0 0 2px #900}
+.cell.drag-over{background:#7dd3fc !important}
+.cell.valid-target{background:#86efac !important}
+.cell.dragging-source{opacity:0.35}
+.piece{cursor:grab;text-shadow:1px 1px 0 rgba(0,0,0,0.35);line-height:1}
+.piece:active{cursor:grabbing}
+.editor-panel{flex:1;min-width:360px;background:#2b3b3f;border-radius:20px;padding:16px;color:#f0e6d0}
+textarea{width:100%;font-family:'Fira Code',monospace;background:#1e2a2e;color:#d4d4d4;border:1px solid #5f7f6b;border-radius:12px;padding:10px;font-size:11.5px;resize:vertical}
+button{background:#e6b17e;border:none;padding:7px 14px;border-radius:40px;font-weight:bold;cursor:pointer;transition:0.1s;margin:5px 5px 0 0;font-size:0.85rem}
+button:hover{background:#ffcd94;transform:scale(0.97)}
+.status{background:#1e2a2e;border-radius:40px;padding:10px 18px;margin-top:12px;text-align:center;font-weight:bold;font-size:1.1rem;color:#f0e6d0}
+h3{margin-bottom:10px;border-left:4px solid #e6b17e;padding-left:10px;font-size:1rem}
+hr{border-color:#5f7f6b;margin:12px 0}
+.flex-row{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin:10px 0}
+.hint{font-size:12px;opacity:0.8;line-height:1.6}
+.promo-overlay{background:rgba(0,0,0,0.6);display:flex;align-items:center;justify-content:center;min-height:120px;border-radius:12px;margin-top:12px}
+.promo-card{background:#2d3e42;border-radius:20px;padding:20px;text-align:center;color:#f0e6d0;min-width:200px}
+.promo-card h4{margin-bottom:12px;color:#e6b17e}
+.promo-btns{display:flex;gap:12px;justify-content:center;flex-wrap:wrap;margin:12px 0}
+.promo-btns button{font-size:1.5rem;padding:6px 14px}
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="board-panel">
+    <div id="boardContainer" class="chess-board"></div>
+    <div class="status" id="statusMsg"> Turn: White</div>
+    <div class="flex-row" style="justify-content:center;margin-top:12px">
+      <button id="resetBtn"> Reset</button>
+      <button id="exportBtn"> Export JSON</button>
+      <input type="file" id="importFile" accept=".json" style="display:none"/>
+      <button id="importBtn"> Import JSON</button>
+    </div>
+    <div id="promoArea"></div>
+  </div>
+
+  <div class="editor-panel">
+    <h3> Custom Game Config (JSON)</h3>
+    <textarea id="configEditor" rows="20" spellcheck="false"></textarea>
+    <div class="flex-row">
+      <button id="applyConfigBtn"> Apply &amp; Restart</button>
+      <button id="resetDefaultBtn"> Load Demo</button>
+    </div>
+    <hr>
+    <div class="hint">
+      <strong>Demo Presentations:</strong><br>
+      * <code>Unicode chess pieces:</code><code>♔ 	♕ 	♖ 	♗ 	♘ 	♙  	♚ 	♛ 	♜ 	♝ 	♞ 	♟</code>(hole)<br>
+      * <code>Piece Creation</code>: "name":{"symbol": {color}moves"[{dRow:x, dCol:x, sliding:True/False, captureOnly:True/False,moveOnly:True/False}],"canPromoteTo":[]}<br>
+      * <code>Layout Edit</code>: "row,col":{type:"",owner:""} <br>
+      * <code>promotionZones</code> row: x,col: x<br>
+      * blocked cells cannot be crossed
+      * <code>winConditions</code>: captureAll, reachSquare, noLegalMoves<br>
+      * highlights = legal move.
+    </div>
+  </div>
+</div>
+
+<script>
+const DEFAULT_CONFIG = {
+  board:{rows:10,cols:8,blockedCells:[{row:4,col:4}]},
+  pieceTypes:{
+    bishop:{
+      symbol:{white:"♗",black:"♝"},
+      moves:[
+        {dRow:1,dCol:1,sliding:true},{dRow:1,dCol:-1,sliding:true},
+        {dRow:-1,dCol:1,sliding:true},{dRow:-1,dCol:-1,sliding:true}
+      ],
+      canPromoteTo:[]
+    },
+    king:{
+      symbol:{white:"♔",black:"♚"},
+      moves:[
+        {dRow:1,dCol:0},{dRow:-1,dCol:0},{dRow:0,dCol:1},{dRow:0,dCol:-1},
+        {dRow:1,dCol:1},{dRow:1,dCol:-1},{dRow:-1,dCol:1},{dRow:-1,dCol:-1},
+      ],
+      canPromoteTo:[]
+    },
+    queen:{
+      symbol:{white:"♕",black:"♛"},
+      moves:[
+        {dRow:1,dCol:0,sliding:true},{dRow:-1,dCol:0,sliding:true},{dRow:0,dCol:1,sliding:true},{dRow:0,dCol:-1,sliding:true},
+        {dRow:1,dCol:1,sliding:true},{dRow:1,dCol:-1,sliding:true},{dRow:-1,dCol:1,sliding:true},{dRow:-1,dCol:-1,sliding:true},
+      ],
+      canPromoteTo:[]
+    },
+    rook:{
+      symbol:{white:"♖",black:"♜"},
+      moves:[
+        {dRow:1,dCol:0,sliding:true},{dRow:0,dCol:-1,sliding:true},
+        {dRow:0,dCol:1,sliding:true},{dRow:-1,dCol:0,sliding:true}
+      ],
+      canPromoteTo:[]
+    },
+    knight:{
+      symbol:{white:"♘",black:"♘"},
+      moves:[
+      {dRow:1,dCol:2},{dRow:-1,dCol:-2},{dRow:2,dCol:1},{dRow:-1,dCol:-2},
+      {dRow:-1,dCol:2},{dRow:1,dCol:-2},{dRow:-2,dCol:1},{dRow:2,dCol:-1},
+      {dRow:-2,dCol:-1}
+      ],
+      canPromoteTo:[]
+    }
+  },
+  startingLayout:{
+    "0,0":{type:"bishop",owner:"black"},"0,1":{type:"bishop",owner:"black"},
+    "0,2":{type:"bishop",owner:"black"},"0,3":{type:"king",owner:"black"},
+    "0,4":{type:"bishop",owner:"black"},"0,5":{type:"bishop",owner:"black"},
+    "0,6":{type:"bishop",owner:"black"},"0,7":{type:"bishop",owner:"black"},
+    "9,0":{type:"bishop",owner:"white"},"9,1":{type:"bishop",owner:"white"},
+    "9,2":{type:"bishop",owner:"white"},"9,3":{type:"king",owner:"white"},
+    "9,4":{type:"bishop",owner:"white"},"9,5":{type:"bishop",owner:"white"},
+    "9,6":{type:"bishop",owner:"white"},"9,7":{type:"bishop",owner:"white"}
+  },
+  promotionZones:[
+    {row:0,col:0},{row:0,col:1},{row:0,col:2},{row:0,col:3},
+    {row:0,col:4},{row:0,col:5},{row:0,col:6},{row:0,col:7},
+    {row:9,col:0},{row:9,col:1},{row:9,col:2},{row:9,col:3},
+    {row:9,col:4},{row:9,col:5},{row:9,col:6},{row:9,col:7}
+  ],
+  winConditions:[
+    {type:"captureAll",owner:"white"},
+    {type:"captureAll",owner:"black"}
+  ],
+  turnOrder:"whiteFirst"
+};
+
+let cfg = JSON.parse(JSON.stringify(DEFAULT_CONFIG));
+let board = new Map();
+let turn = "white";
+let winner = null;
+let dragSrc = null;
+let highlighted = new Set();
+
+function pieceSymbol(type, owner) {
+  const pt = cfg.pieceTypes[type];
+  if (pt && pt.symbol && pt.symbol[owner]) return pt.symbol[owner];
+  return type[0].toUpperCase();
+}
+
+function isBlocked(r,c) {
+  return cfg.board.blockedCells.some(b=>b.row===r&&b.col===c);
+}
+
+function inBounds(r,c) {
+  return r>=0&&r<cfg.board.rows&&c>=0&&c<cfg.board.cols;
+}
+
+function isPromZone(r,c) {
+  return (cfg.promotionZones||[]).some(z=>z.row===r&&z.col===c);
+}
+
+// Core: get all legal destination squares for piece at (r,c)
+function legalTargets(r, c) {
+  const piece = board.get(`${r},${c}`);
+  if (!piece) return [];
+  const pt = cfg.pieceTypes[piece.type];
+  if (!pt) return [];
+  const targets = [];
+  for (const mv of pt.moves) {
+    const dr = mv.dRow ?? 0;
+    const dc = mv.dCol ?? 0;
+    const sliding = !!mv.sliding;
+    const maxSteps = sliding ? (mv.maxSteps || 999) : 1;
+    for (let step = 1; step <= maxSteps; step++) {
+      const tr = r + dr * step;
+      const tc = c + dc * step;
+      if (!inBounds(tr,tc)) break;
+      if (isBlocked(tr,tc)) break;
+      const occupant = board.get(`${tr},${tc}`);
+      if (occupant) {
+        if (occupant.owner !== piece.owner && !mv.moveOnly) targets.push([tr,tc]);
+        break; // blocked by any piece (friend or foe)
+      }
+      if (!mv.captureOnly) targets.push([tr,tc]);
+    }
+  }
+  return targets;
+}
+
+function isValidMove(fr,fc,tr,tc) {
+  if (winner) return false;
+  const piece = board.get(`${fr},${fc}`);
+  if (!piece || piece.owner !== turn) return false;
+  return legalTargets(fr,fc).some(([r,c])=>r===tr&&c===tc);
+}
+
+function evalWinner() {
+  for (const cond of (cfg.winConditions||[])) {
+    if (cond.type==="captureAll") {
+      const opp = cond.owner==="white"?"black":"white";
+      let has = false;
+      for (const p of board.values()) if (p.owner===opp){has=true;break;}
+      if (!has) return cond.owner;
+    }
+    if (cond.type==="reachSquare") {
+      const p = board.get(`${cond.position.row},${cond.position.col}`);
+      if (p&&p.owner===cond.owner) return cond.owner;
+    }
+    if (cond.type==="noLegalMoves") {
+      let hasMove = false;
+      for (const [coord,p] of board.entries()) {
+        if (p.owner!==cond.owner) continue;
+        const [r,c]=coord.split(',').map(Number);
+        if (legalTargets(r,c).length>0){hasMove=true;break;}
+      }
+      if (!hasMove) return cond.owner==="white"?"black":"white";
+    }
+  }
+  return null;
+}
+
+function buildBoard() {
+  board = new Map();
+  for (const [k,v] of Object.entries(cfg.startingLayout)) {
+    board.set(k,{type:v.type,owner:v.owner});
+  }
+}
+
+function resetGame() {
+  buildBoard();
+  turn = cfg.turnOrder==="whiteFirst"?"white":"black";
+  winner = null;
+  dragSrc = null;
+  highlighted = new Set();
+  setStatus(` Turn: ${cap(turn)}`);
+  renderBoard();
+}
+
+function cap(s){return s[0].toUpperCase()+s.slice(1)}
+function setStatus(msg){document.getElementById('statusMsg').innerHTML=msg}
+
+function renderBoard() {
+  const container = document.getElementById('boardContainer');
+  const rows = cfg.board.rows, cols = cfg.board.cols;
+  container.style.gridTemplateColumns = `repeat(${cols},60px)`;
+  container.innerHTML = '';
+  for (let r=0;r<rows;r++) {
+    for (let c=0;c<cols;c++) {
+      const key = `${r},${c}`;
+      const piece = board.get(key);
+      const blocked = isBlocked(r,c);
+      const cell = document.createElement('div');
+      cell.className = 'cell';
+      cell.dataset.r = r; cell.dataset.c = c;
+      const even = (r+c)%2===0;
+      cell.style.backgroundColor = blocked ? '#222' : (even?'#f0d9b5':'#b58863');
+      if (blocked) cell.classList.add('blocked');
+      if (highlighted.has(key)) cell.classList.add('valid-target');
+      if (dragSrc && dragSrc[0]===r && dragSrc[1]===c) cell.classList.add('dragging-source');
+
+      if (piece) {
+        const pd = document.createElement('div');
+        pd.className = 'piece';
+        pd.textContent = pieceSymbol(piece.type, piece.owner);
+        pd.draggable = !winner && piece.owner===turn;
+        pd.addEventListener('dragstart', e => {
+          if (winner || piece.owner!==turn){e.preventDefault();return}
+          dragSrc=[r,c];
+          highlighted = new Set(legalTargets(r,c).map(([tr,tc])=>`${tr},${tc}`));
+          e.dataTransfer.effectAllowed='move';
+          e.dataTransfer.setData('text/plain',key);
+          setTimeout(()=>renderBoard(),0);
+        });
+        pd.addEventListener('dragend', ()=>{
+          dragSrc=null; highlighted=new Set(); renderBoard();
+        });
+        cell.appendChild(pd);
+      }
+
+      if (!blocked) {
+        cell.addEventListener('dragover', e=>{e.preventDefault();cell.classList.add('drag-over')});
+        cell.addEventListener('dragleave', ()=>cell.classList.remove('drag-over'));
+        cell.addEventListener('drop', async e=>{
+          e.preventDefault();
+          cell.classList.remove('drag-over');
+          if (!dragSrc) return;
+          const [fr,fc]=dragSrc;
+          const tr=+cell.dataset.r, tc=+cell.dataset.c;
+          dragSrc=null; highlighted=new Set();
+          if (isValidMove(fr,fc,tr,tc)) await executeMove(fr,fc,tr,tc);
+          else renderBoard();
+        });
+      }
+      container.appendChild(cell);
+    }
+  }
+}
+
+async function executeMove(fr,fc,tr,tc) {
+  const piece = {...board.get(`${fr},${fc}`)};
+  const captured = board.get(`${tr},${tc}`);
+  board.delete(`${fr},${fc}`);
+  board.set(`${tr},${tc}`, piece);
+
+  // promotion
+  if (isPromZone(tr,tc)) {
+    const promoOptions = (cfg.pieceTypes[piece.type]?.canPromoteTo)||[];
+    if (promoOptions.length>0) {
+      const chosen = await askPromotion(piece.type, piece.owner, promoOptions);
+      if (chosen===null) {
+        // revert
+        board.delete(`${tr},${tc}`);
+        board.set(`${fr},${fc}`,piece);
+        if (captured) board.set(`${tr},${tc}`,captured);
+        renderBoard();
+        return;
+      }
+      board.set(`${tr},${tc}`,{type:chosen,owner:piece.owner});
+    }
+  }
+
+  const w = evalWinner();
+  if (w) {
+    winner=w;
+    setStatus(` ${cap(w)} WINS! `);
+    renderBoard();
+    return;
+  }
+  turn = turn==="white"?"black":"white";
+  setStatus(` Turn: ${cap(turn)}`);
+  renderBoard();
+}
+
+function askPromotion(pieceType, owner, options) {
+  return new Promise(resolve=>{
+    const area = document.getElementById('promoArea');
+    area.innerHTML='';
+    const overlay = document.createElement('div');
+    overlay.className='promo-overlay';
+    const card = document.createElement('div');
+    card.className='promo-card';
+    card.innerHTML=`<h4>Promotion: choose new piece</h4>`;
+    const btns = document.createElement('div');
+    btns.className='promo-btns';
+    options.forEach(name=>{
+      const b=document.createElement('button');
+      const pt=cfg.pieceTypes[name];
+      b.textContent=(pt&&pt.symbol&&pt.symbol[owner])?pt.symbol[owner]:name[0].toUpperCase();
+      b.title=name;
+      b.onclick=()=>{area.innerHTML='';resolve(name)};
+      btns.appendChild(b);
+    });
+    const cancel=document.createElement('button');
+    cancel.textContent='Cancel';
+    cancel.style.fontSize='0.8rem';
+    cancel.onclick=()=>{area.innerHTML='';resolve(null)};
+    card.appendChild(btns);
+    card.appendChild(cancel);
+    overlay.appendChild(card);
+    area.appendChild(overlay);
+  });
+}
+
+function applyConfig() {
+  try {
+    cfg=JSON.parse(document.getElementById('configEditor').value);
+    resetGame();
+  } catch(e){alert('Invalid JSON: '+e.message)}
+}
+
+function loadDemo() {
+  cfg=JSON.parse(JSON.stringify(DEFAULT_CONFIG));
+  document.getElementById('configEditor').value=JSON.stringify(cfg,null,2);
+  resetGame();
+}
+
+function exportCfg() {
+  const b=new Blob([JSON.stringify(cfg,null,2)],{type:'application/json'});
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(b);a.download='chess_config.json';a.click();
+}
+
+function importCfg(file) {
+  const fr=new FileReader();
+  fr.onload=e=>{
+    try{
+      cfg=JSON.parse(e.target.result);
+      document.getElementById('configEditor').value=JSON.stringify(cfg,null,2);
+      resetGame();
+    }catch{alert('Invalid config file')}
+  };
+  fr.readAsText(file);
+}
+
+document.getElementById('applyConfigBtn').onclick=applyConfig;
+document.getElementById('resetDefaultBtn').onclick=loadDemo;
+document.getElementById('resetBtn').onclick=resetGame;
+document.getElementById('exportBtn').onclick=exportCfg;
+document.getElementById('importBtn').onclick=()=>document.getElementById('importFile').click();
+document.getElementById('importFile').onchange=e=>{if(e.target.files[0])importCfg(e.target.files[0])};
+
+document.getElementById('configEditor').value=JSON.stringify(DEFAULT_CONFIG,null,2);
+resetGame();
+</script>
+</body></html>
